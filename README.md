@@ -20,7 +20,11 @@ stet ~/code/myrepo      # any path inside a repo works
 stet --fg               # foreground: prints STET_URL=..., Ctrl+C stops
 stet --no-open          # don't auto-open the browser
 stet --port 7777        # fixed port (default: ephemeral)
+stet --idle 600         # shut down after 10 min without browser contact (default 120s, 0 = never)
 ```
+
+The UI heartbeats the server every 2s; closing the tab (or the whole browser)
+stops the heartbeat and the server exits on its own after `--idle` seconds.
 
 Press `?` in the UI for keyboard shortcuts. Quit with the ⏻ button or `q`.
 

@@ -4,6 +4,7 @@ const TOKEN = new URLSearchParams(location.search).get('t') || ''
 
 const $ = id => document.getElementById(id)
 const sidebar = $('sidebar')
+
 const fileList = $('file-list')
 const diffContainer = $('diff-container')
 const emptyState = $('empty-state')
@@ -595,7 +596,9 @@ $('btn-quit').onclick = async () => {
   const ok = await confirmModal('Quit stet?', 'The local server will shut down.', 'Quit')
   if (!ok) return
   try { await api('/api/quit', {}) } catch {}
+  // message first — window.close() is best-effort (browsers may refuse)
   document.body.innerHTML = '<div class="empty-state" style="height:100vh"><p>stet server stopped — you can close this tab.</p></div>'
+  window.close()
 }
 
 // ---------------------------------------------------------------------------

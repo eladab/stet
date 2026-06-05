@@ -35,6 +35,7 @@ function parseArgs (argv) {
     if (argv[i] === '--repo') args.repo = argv[++i]
     else if (argv[i] === '--port') args.port = Number(argv[++i])
     else if (argv[i] === '--fg') args.fg = true
+    else if (argv[i] === '--idle') args.idle = Number(argv[++i])
     else if (argv[i] === '--no-open') args.noOpen = true
     else if (argv[i] === '--help' || argv[i] === '-h') args.help = true
     else if (!argv[i].startsWith('-')) args._.push(argv[i])
@@ -44,7 +45,8 @@ function parseArgs (argv) {
 
 const args = parseArgs(process.argv.slice(2))
 if (args.help) {
-  console.log('usage: stet [path-inside-repo] [--port N] [--no-open] [--fg]')
+  console.log('usage: stet [path-inside-repo] [--port N] [--no-open] [--fg] [--idle SECS]')
+  console.log('  --idle: shut down after N seconds without browser contact (default 120, 0 = never)')
   process.exit(0)
 }
 const repoArg = args.repo || args._[0]
@@ -70,6 +72,7 @@ if (!args.fg) {
   const childArgs = [SELF, '--fg', '--repo', REPO]
   if (portArg) childArgs.push('--port', String(portArg))
   if (!openArg) childArgs.push('--no-open')
+  if (args.idle !== undefined) childArgs.push('--idle', String(args.idle))
   spawn(process.execPath, childArgs, { stdio: 'ignore', detached: true }).unref()
   console.log('stet starting — browser will open. Quit with the ⏻ button or the q key.')
   process.exit(0)
@@ -366,6 +369,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (url.pathname.startsWith('/api/')) {
       if (!authorized(req, url)) return sendJSON(res, 401, { error: 'unauthorized' })
+      lastSeen = Date.now(); sawClient = true
       if (req.method === 'POST' && !sameOrigin(req)) return sendJSON(res, 403, { error: 'bad origin' })
 
       if (req.method === 'GET') {
@@ -414,6 +418,23 @@ const server = http.createServer(async (req, res) => {
 // ---------------------------------------------------------------------------
 // boot
 // ---------------------------------------------------------------------------
+// Idle watchdog: the UI polls every 2s (browsers throttle hidden tabs to
+// ~1/min), so a closed tab/browser stops the heartbeat and we shut down.
+// Before any client ever connects, allow a longer window for the browser
+// to arrive. --idle 0 disables.
+const IDLE_GRACE_MS = (args.idle === undefined ? 120 : args.idle) * 1000
+let lastSeen = Date.now()
+let sawClient = false
+if (IDLE_GRACE_MS > 0) {
+  setInterval(() => {
+    const idle = Date.now() - lastSeen
+    if (idle > (sawClient ? IDLE_GRACE_MS : Math.max(IDLE_GRACE_MS, 10 * 60_000))) {
+      console.log('stet: no browser activity — shutting down')
+      process.exit(0)
+    }
+  }, 5_000).unref()
+}
+
 server.listen(portArg || 0, '127.0.0.1', () => {
   const { port } = server.address()
   const url = `http://127.0.0.1:${port}/?t=${TOKEN}`
