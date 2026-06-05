@@ -28,6 +28,25 @@ stops the heartbeat and the server exits on its own after `--idle` seconds.
 
 Press `?` in the UI for keyboard shortcuts. Quit with the ⏻ button or `q`.
 
+## Vim
+
+```vim
+" :Stet or <leader>gs — open stet for the repo of the current file
+function! s:Stet() abort
+  let l:dir = empty(expand('%:p:h')) ? getcwd() : expand('%:p:h')
+  if has('nvim')
+    call jobstart(['stet', l:dir])
+  elseif exists('*job_start')
+    call job_start(['stet', l:dir])
+  else
+    silent execute '!stet ' . shellescape(l:dir)
+    redraw!
+  endif
+endfunction
+command! Stet call s:Stet()
+nnoremap <silent> <leader>gs :Stet<CR>
+```
+
 ## Security
 
 Binds 127.0.0.1 only; every API call requires a per-instance random token; mutating
