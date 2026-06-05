@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
+  <title>stet</title>
+  <link rel="stylesheet" href="app.css">
+  <link rel="icon" href="data:image/svg+xml,&lt;svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'&gt;&lt;text y='13' font-size='13'&gt;⎇&lt;/text&gt;&lt;/svg&gt;">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 16 16" width="18" height="18" aria-hidden="true">
+        <path fill="currentColor" d="M11.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm-2.25.75a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25ZM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM3.5 3.25a.75.75 0 1 1 1.5 0 .75.75 0 0 1-1.5 0Z"/>
+      </svg>
+      <span id="repo-name">…</span>
+      <span class="branch-chip" id="branch-chip" title="current branch">…</span>
+    </div>
+    <nav class="tabs" role="tablist">
+      <button class="tab active" id="tab-work" role="tab">Working Tree</button>
+      <button class="tab" id="tab-branch" role="tab">Branch</button>
+    </nav>
+    <div class="topbar-actions">
+      <div class="view-toggle" role="group" aria-label="diff view mode">
+        <button id="view-unified" class="active" title="Unified view">Unified</button>
+        <button id="view-split" title="Side-by-side view">Split</button>
+      </div>
+      <button class="icon-btn" id="btn-refresh" title="Refresh">
+        <svg viewBox="0 0 16 16" width="15" height="15"><path fill="currentColor" d="M8 3a5 5 0 1 0 4.546 2.914.75.75 0 0 1 1.364-.625A6.5 6.5 0 1 1 8 1.5v-1l3 2-3 2v-1Z"/></svg>
+      </button>
+      <button class="icon-btn" id="btn-help" title="Keyboard shortcuts (?)">?</button>
+      <button class="icon-btn danger" id="btn-quit" title="Quit stet server">
+        <svg viewBox="0 0 16 16" width="15" height="15"><path fill="currentColor" d="M7.25 1.75a.75.75 0 0 1 1.5 0v5.5a.75.75 0 0 1-1.5 0v-5.5ZM4.1 3.67a.75.75 0 0 0-.94-1.17 6.5 6.5 0 1 0 9.68 0 .75.75 0 0 0-.94 1.17 5 5 0 1 1-7.8 0Z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" id="sidebar" aria-label="changed files">
+      <div class="file-list" id="file-list"></div>
+      <form class="commit-panel" id="commit-panel" hidden>
+        <div class="subject-wrap">
+          <input id="commit-subject" type="text" placeholder="Commit message" maxlength="200"
+                 autocomplete="off" spellcheck="true" aria-label="commit subject">
+          <span class="subject-count" id="subject-count" aria-hidden="true"></span>
+        </div>
+        <textarea id="commit-body" placeholder="Extended description (optional)" rows="3"
+                  spellcheck="true" aria-label="commit body"></textarea>
+        <label class="amend-row">
+          <input type="checkbox" id="commit-amend">
+          <span>Amend <span class="amend-info" id="amend-info"></span></span>
+        </label>
+        <button type="submit" class="btn btn-primary commit-btn" id="commit-btn" disabled>Commit</button>
+      </form>
+    </aside>
+    <main class="main" id="main">
+      <div class="empty-state" id="empty-state">
+        <svg viewBox="0 0 16 16" width="44" height="44"><path fill="currentColor" opacity=".35" d="M11.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm-2.25.75a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25ZM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM3.5 3.25a.75.75 0 1 1 1.5 0 .75.75 0 0 1-1.5 0Z"/></svg>
+        <p>Select a file to view its diff</p>
+      </div>
+      <div id="diff-container" hidden></div>
+    </main>
+  </div>
+
+  <div class="modal-backdrop" id="modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true">
+      <h3 id="modal-title">Discard changes?</h3>
+      <p id="modal-body"></p>
+      <div class="modal-actions">
+        <button class="btn" id="modal-cancel">Cancel</button>
+        <button class="btn btn-danger" id="modal-confirm">Discard</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="help" hidden>
+    <div class="modal help-modal" role="dialog" aria-modal="true" aria-label="keyboard shortcuts">
+      <h3>Keyboard shortcuts</h3>
+      <div class="help-cols">
+        <table class="help-table">
+          <tr><th colspan="2">Navigation</th></tr>
+          <tr><td><kbd>j</kbd> / <kbd>k</kbd></td><td>next / previous file</td></tr>
+          <tr><td><kbd>g g</kbd> / <kbd>G</kbd></td><td>first / last file</td></tr>
+          <tr><td><kbd>]</kbd> / <kbd>[</kbd></td><td>next / previous hunk</td></tr>
+          <tr><td><kbd>Ctrl</kbd><kbd>d</kbd> / <kbd>Ctrl</kbd><kbd>u</kbd></td><td>scroll half page</td></tr>
+          <tr><td><kbd>Esc</kbd></td><td>clear hunk focus / close</td></tr>
+          <tr><th colspan="2">View</th></tr>
+          <tr><td><kbd>1</kbd> / <kbd>2</kbd> / <kbd>Tab</kbd></td><td>working tree / branch</td></tr>
+          <tr><td><kbd>v</kbd></td><td>toggle unified / split</td></tr>
+        </table>
+        <table class="help-table">
+          <tr><th colspan="2">Actions <span class="help-note">(file, or focused hunk)</span></th></tr>
+          <tr><td><kbd>s</kbd></td><td>stage</td></tr>
+          <tr><td><kbd>u</kbd></td><td>unstage</td></tr>
+          <tr><td><kbd>Space</kbd></td><td>toggle stage / unstage</td></tr>
+          <tr><td><kbd>d</kbd></td><td>discard (with confirm)</td></tr>
+          <tr><td><kbd>c</kbd></td><td>focus commit message</td></tr>
+          <tr><td><kbd>⌘</kbd><kbd>Enter</kbd></td><td>commit (from message field)</td></tr>
+          <tr><th colspan="2">General</th></tr>
+          <tr><td><kbd>r</kbd></td><td>refresh</td></tr>
+          <tr><td><kbd>q</kbd></td><td>quit server</td></tr>
+          <tr><td><kbd>?</kbd></td><td>this help</td></tr>
+          <tr><th colspan="2">Dialogs</th></tr>
+          <tr><td><kbd>Enter</kbd> / <kbd>y</kbd></td><td>confirm</td></tr>
+          <tr><td><kbd>Esc</kbd> / <kbd>n</kbd></td><td>cancel</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="toasts" id="toasts"></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
