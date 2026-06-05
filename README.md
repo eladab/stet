@@ -31,7 +31,7 @@ Press `?` in the UI for keyboard shortcuts. Quit with the ⏻ button or `q`.
 ## Vim
 
 ```vim
-" :Stet or <leader>gs — open stet for the repo of the current file
+" :Stet or <leader>s — open stet for the repo of the current file
 function! s:Stet() abort
   let l:dir = empty(expand('%:p:h')) ? getcwd() : expand('%:p:h')
   if has('nvim')
@@ -44,7 +44,14 @@ function! s:Stet() abort
   endif
 endfunction
 command! Stet call s:Stet()
-nnoremap <silent> <leader>gs :Stet<CR>
+nnoremap <silent> <leader>s :Stet<CR>
+
+" Reload buffers when stet discards change files on disk
+set autoread
+augroup stet_checktime
+  autocmd!
+  autocmd FocusGained,BufEnter,CursorHold,CursorHoldI * silent! checktime
+augroup END
 ```
 
 ## Security
