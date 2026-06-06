@@ -15,6 +15,7 @@ const state = {
   selected: null,         // { where, file }
   work: null,             // /api/state payload
   branch: null,           // /api/branch payload
+  base: null,             // user-selected comparison base (null = server default)
   etag: null,
   navList: [],            // flattened [{where, file}] in sidebar order
   hunks: [],              // raw hunk text of the open diff
@@ -183,6 +184,7 @@ function buildNavList () {
     for (const e of w.unstaged) state.navList.push({ where: 'unstaged', file: e.path })
     for (const e of w.untracked) state.navList.push({ where: 'untracked', file: e.path })
   } else {
+    for (const c of state.branch?.commits || []) state.navList.push({ where: 'commit', file: c.sha })
     for (const e of state.branch?.files || []) state.navList.push({ where: 'branch', file: e.path })
   }
 }
@@ -219,16 +221,61 @@ function renderSidebar () {
   } else {
     const b = state.branch
     if (!b) return
+    fileList.appendChild(baseSelector(b))
     if (!b.base) {
-      fileList.innerHTML = '<div class="sidebar-empty">No base branch detected</div>'
+      fileList.insertAdjacentHTML('beforeend', '<div class="sidebar-empty">No base branch detected</div>')
       return
     }
-    if (!b.files.length) {
-      fileList.innerHTML = `<div class="sidebar-empty">No commits vs <b>${esc(b.base)}</b></div>`
+    if (!b.commits.length && !b.files.length) {
+      fileList.insertAdjacentHTML('beforeend', `<div class="sidebar-empty">No commits vs <b>${esc(b.base)}</b></div>`)
       return
     }
-    fileList.appendChild(group(`vs ${esc(b.base)}`, b.files, 'branch', () => []))
+    if (b.commits.length) fileList.appendChild(commitGroup(b.commits))
+    if (b.files.length) fileList.appendChild(group('Files changed', b.files, 'branch', () => []))
   }
+}
+
+function baseSelector (b) {
+  const row = document.createElement('div')
+  row.className = 'base-row'
+  row.innerHTML = '<span>vs</span>'
+  const sel = document.createElement('select')
+  sel.title = 'comparison base'
+  for (const ref of b.bases || []) {
+    const opt = document.createElement('option')
+    opt.value = ref
+    opt.textContent = ref
+    if (ref === b.base) opt.selected = true
+    sel.appendChild(opt)
+  }
+  sel.onchange = async () => {
+    state.base = sel.value
+    state.selected = null
+    await refresh()
+  }
+  sel.onkeydown = e => { if (e.key === 'Escape') sel.blur() }
+  row.appendChild(sel)
+  return row
+}
+
+function commitGroup (commits) {
+  const frag = document.createDocumentFragment()
+  const h = document.createElement('div')
+  h.className = 'group-header'
+  h.innerHTML = `Commits <span class="count">${commits.length}</span>`
+  frag.appendChild(h)
+  for (const c of commits) {
+    const row = document.createElement('button')
+    row.className = 'file-row commit-row'
+    if (state.selected && state.selected.where === 'commit' && state.selected.file === c.sha) {
+      row.classList.add('selected')
+    }
+    row.title = `${c.subject} — ${c.author}, ${c.date}`
+    row.innerHTML = `<span class="sha">${esc(c.short)}</span><span class="name"><bdi>${esc(c.subject)}</bdi></span>`
+    row.onclick = () => selectFile('commit', c.sha)
+    frag.appendChild(row)
+  }
+  return frag
 }
 
 // ---------------------------------------------------------------------------
@@ -246,22 +293,73 @@ async function selectFile (where, file) {
   diffContainer.hidden = false
   diffContainer.innerHTML = '<div class="nodiff-note">Loading…</div>'
   try {
-    const data = await api(`/api/diff?where=${encodeURIComponent(where)}&file=${encodeURIComponent(file)}`)
-    renderDiff(where, file, data)
+    if (where === 'commit') {
+      const data = await api(`/api/commitdiff?sha=${encodeURIComponent(file)}`)
+      renderCommit(data)
+    } else {
+      let url = `/api/diff?where=${encodeURIComponent(where)}&file=${encodeURIComponent(file)}`
+      if (where === 'branch' && state.base) url += `&base=${encodeURIComponent(state.base)}`
+      const data = await api(url)
+      renderDiff(where, file, data)
+    }
   } catch (e) {
     diffContainer.innerHTML = ''
     toast(`Failed to load diff: ${e.message}`, { error: true, detail: e.detail })
   }
 }
 
+// Split a multi-file patch into per-file chunks.
+function splitDiff (text) {
+  const files = []
+  let cur = null
+  for (const line of text.split('\n')) {
+    if (line.startsWith('diff --git ') || line.startsWith('diff --cc ')) {
+      if (cur) files.push(cur)
+      const m = line.match(/ b\/(.*)$/)
+      cur = { path: m ? m[1] : line.replace(/^diff --(git|cc) /, ''), lines: [] }
+    }
+    if (cur) cur.lines.push(line)
+  }
+  if (cur) files.push(cur)
+  return files.map(f => ({ path: f.path, text: f.lines.join('\n') }))
+}
+
+function renderCommit (data) {
+  diffContainer.textContent = ''
+  state.hunkFocus = null
+  state.hunks = [] // read-only view: no hunk actions
+
+  const meta = document.createElement('div')
+  meta.className = 'commit-meta'
+  meta.innerHTML = `
+    <div class="subject"><span class="sha">${esc(data.short)}</span> ${esc(data.subject)}</div>
+    <div class="byline">${esc(data.author)} · ${esc(data.date)}</div>
+    ${data.body ? `<pre class="body">${esc(data.body)}</pre>` : ''}`
+  diffContainer.appendChild(meta)
+
+  const parts = splitDiff(data.diff)
+  if (!parts.length) {
+    diffContainer.insertAdjacentHTML('beforeend', '<div class="nodiff-note">Empty commit</div>')
+    return
+  }
+  for (const p of parts) {
+    const binary = /^Binary files .* differ$|^GIT binary patch$/m.test(p.text)
+    const parsed = binary ? { hunks: [], adds: 0, dels: 0 } : parseDiff(p.text)
+    diffContainer.appendChild(makeFileCard('commit', p.path, parsed, binary))
+  }
+}
+
 function renderDiff (where, file, data) {
   diffContainer.textContent = ''
   state.hunkFocus = null
-  const card = document.createElement('div')
-  card.className = 'file-card'
-
   const parsed = data.binary ? { hunks: [], adds: 0, dels: 0 } : parseDiff(data.diff)
   state.hunks = parsed.hunks.map(h => h.raw.join('\n') + '\n')
+  diffContainer.appendChild(makeFileCard(where, file, parsed, data.binary))
+}
+
+function makeFileCard (where, file, parsed, binary) {
+  const card = document.createElement('div')
+  card.className = 'file-card'
 
   // --- header with file-level actions
   const header = document.createElement('div')
@@ -280,7 +378,7 @@ function renderDiff (where, file, data) {
   card.appendChild(header)
 
   // --- body
-  if (data.binary) {
+  if (binary) {
     card.insertAdjacentHTML('beforeend', '<div class="binary-note">Binary file — file-level actions only</div>')
   } else if (!parsed.hunks.length) {
     card.insertAdjacentHTML('beforeend', '<div class="nodiff-note">No textual changes (mode change or empty file)</div>')
@@ -290,7 +388,7 @@ function renderDiff (where, file, data) {
       card.appendChild(state.view === 'split' ? renderSplit(hunk) : renderUnified(hunk))
     }
   }
-  diffContainer.appendChild(card)
+  return card
 }
 
 function fileActionsFor (where, file) {
@@ -531,12 +629,14 @@ function whereStillExists () {
   const s = state.selected
   if (!s || !state.work) return false
   if (s.where === 'branch') return (state.branch?.files || []).some(f => f.path === s.file)
+  if (s.where === 'commit') return (state.branch?.commits || []).some(c => c.sha === s.file)
   const list = { staged: state.work.staged, unstaged: state.work.unstaged, untracked: state.work.untracked }[s.where] || []
   return list.some(f => f.path === s.file)
 }
 
 async function refresh ({ keepSelection = false } = {}) {
-  const [work, branch] = await Promise.all([api('/api/state'), api('/api/branch').catch(() => null)])
+  const branchUrl = '/api/branch' + (state.base ? `?base=${encodeURIComponent(state.base)}` : '')
+  const [work, branch] = await Promise.all([api('/api/state'), api(branchUrl).catch(() => null)])
   state.work = work
   state.branch = branch
 
@@ -649,7 +749,7 @@ function clearHunkFocus () {
 function kbAction (intent) {
   const s = state.selected
   if (!s) return
-  if (s.where === 'branch') { toast('Branch view is read-only'); return }
+  if (s.where === 'branch' || s.where === 'commit') { toast('Branch view is read-only'); return }
   const hunk = state.hunkFocus != null ? state.hunks[state.hunkFocus] : null
 
   let op = intent
@@ -721,6 +821,16 @@ document.addEventListener('keydown', e => {
     case 'c':
       if (state.tab === 'work') { e.preventDefault(); subjectEl.focus() }
       break
+    case 'b': {
+      e.preventDefault()
+      if (state.tab !== 'branch') setTab('branch')
+      const sel = fileList.querySelector('.base-row select')
+      if (sel) {
+        sel.focus()
+        if (sel.showPicker) { try { sel.showPicker() } catch {} }
+      }
+      break
+    }
     case '1': setTab('work'); break
     case '2': setTab('branch'); break
     case 'Tab': e.preventDefault(); setTab(state.tab === 'work' ? 'branch' : 'work'); break

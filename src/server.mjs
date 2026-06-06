@@ -171,6 +171,29 @@ async function detectBase () {
   return baseCache
 }
 
+// Refs arrive from the client (base selector, commit shas) and are passed as
+// positional git args — reject anything option-shaped or outside ref charset.
+function safeRef (r) {
+  if (typeof r !== 'string' || !r || r.startsWith('-')) return null
+  if (!/^[A-Za-z0-9._/@^~-]+$/.test(r) || r.includes('..')) return null
+  return r
+}
+
+// Resolve the comparison base: explicit (validated + verified) or detected.
+async function resolveBase (requested) {
+  if (requested) {
+    const ref = safeRef(requested)
+    if (!ref) throw httpErr(400, 'invalid base ref')
+    try {
+      await git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])
+    } catch {
+      throw httpErr(404, `no such ref: ${ref}`)
+    }
+    return ref
+  }
+  return detectBase()
+}
+
 // ---------------------------------------------------------------------------
 // API handlers
 // ---------------------------------------------------------------------------
@@ -234,7 +257,7 @@ async function apiDiff (q) {
     // --no-index exits 1 when files differ — that's the normal case
     res = await git(['diff', ...DIFF_FLAGS, '--no-index', '--', '/dev/null', file], { okCodes: [0, 1] })
   } else if (where === 'branch') {
-    const base = await detectBase()
+    const base = await resolveBase(q.get('base'))
     if (!base) throw httpErr(404, 'no base branch found')
     const { stdout: mb } = await git(['merge-base', base, 'HEAD'])
     res = await git(['diff', ...DIFF_FLAGS, mb.trim(), 'HEAD', '--', file])
@@ -245,11 +268,19 @@ async function apiDiff (q) {
   return { diff: binary ? '' : res.stdout, binary }
 }
 
-async function apiBranch () {
-  const base = await detectBase()
-  if (!base) return { base: null, files: [] }
+async function apiBranch (q) {
+  // candidate bases for the selector: local + remote branches (minus HEAD aliases)
+  const { stdout: refsOut } = await git([
+    'for-each-ref', '--format=%(refname:short)', '--sort=-committerdate',
+    'refs/heads', 'refs/remotes'
+  ])
+  const bases = refsOut.split('\n').filter(r => r && !r.endsWith('/HEAD')).slice(0, 100)
+
+  const base = await resolveBase(q.get('base'))
+  if (!base) return { base: null, bases, files: [], commits: [] }
   const { stdout: mbOut } = await git(['merge-base', base, 'HEAD'])
   const mb = mbOut.trim()
+
   const { stdout } = await git(['diff', '--name-status', '-z', '--no-color', mb, 'HEAD'])
   const tokens = stdout.split('\0').filter(Boolean)
   const files = []
@@ -261,7 +292,28 @@ async function apiBranch () {
       files.push({ status, path: tokens[++i] })
     }
   }
-  return { base, mergeBase: mb, files }
+
+  // branch commits, newest first (capped — a branch diff isn't a log browser)
+  const { stdout: logOut } = await git([
+    'log', '--format=%H%x00%h%x00%s%x00%an%x00%ar%x01', '--max-count=200', `${mb}..HEAD`
+  ])
+  const commits = logOut.split('\x01').map(s => s.trim()).filter(Boolean).map(line => {
+    const [sha, short, subject, author, date] = line.split('\0')
+    return { sha, short, subject, author, date }
+  })
+
+  return { base, mergeBase: mb, bases, files, commits }
+}
+
+// Full patch of one commit, for the commit list in the branch tab.
+async function apiCommitDiff (q) {
+  const sha = safeRef(q.get('sha'))
+  if (!sha) throw httpErr(400, 'invalid sha')
+  const { stdout: meta } = await git(['log', '-1', '--format=%h%x00%s%x00%an%x00%ar%x00%b', sha])
+  const [short, subject, author, date, body] = meta.split('\0')
+  // `show` handles root commits and merges (combined diff) uniformly
+  const { stdout: diff } = await git(['show', '--format=', '-M', ...DIFF_FLAGS, sha])
+  return { short, subject, author, date, body: (body || '').trim(), diff }
 }
 
 async function apiFileAction (op, body) {
@@ -375,7 +427,8 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'GET') {
         if (url.pathname === '/api/state') return sendJSON(res, 200, await apiState())
         if (url.pathname === '/api/diff') return sendJSON(res, 200, await apiDiff(url.searchParams))
-        if (url.pathname === '/api/branch') return sendJSON(res, 200, await apiBranch())
+        if (url.pathname === '/api/branch') return sendJSON(res, 200, await apiBranch(url.searchParams))
+        if (url.pathname === '/api/commitdiff') return sendJSON(res, 200, await apiCommitDiff(url.searchParams))
         if (url.pathname === '/api/poll') return sendJSON(res, 200, await apiPoll())
         if (url.pathname === '/api/lastcommit') return sendJSON(res, 200, await apiLastCommit())
       } else if (req.method === 'POST') {
@@ -398,7 +451,10 @@ const server = http.createServer(async (req, res) => {
     const rel = url.pathname === '/' ? 'index.html' : url.pathname.slice(1)
     if (!/^[a-z0-9._-]+$/i.test(rel)) { res.writeHead(403); return res.end('forbidden') }
     const serve = data => {
-      res.writeHead(200, { 'Content-Type': MIME[path.extname(rel)] || 'application/octet-stream' })
+      res.writeHead(200, {
+        'Content-Type': MIME[path.extname(rel)] || 'application/octet-stream',
+        'Cache-Control': 'no-cache' // always revalidate — instances are short-lived
+      })
       res.end(data)
     }
     if (ASSETS) {
