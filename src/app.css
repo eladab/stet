@@ -227,10 +227,18 @@ body { display: flex; flex-direction: column; overflow: hidden; }
   cursor: pointer;
   user-select: none;
 }
-.amend-row input { accent-color: var(--accent); margin: 0; }
+.amend-row input { accent-color: var(--accent); margin: 0; flex: none; }
+/* the label text must be a shrinkable flex item for ellipsis to apply */
+.amend-row > span {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+}
 .amend-info {
   font-family: var(--font-mono);
   font-size: 11px;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
