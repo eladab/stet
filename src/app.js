@@ -128,8 +128,46 @@ function parseDiff (text) {
     for (const l of h.lines) {
       if (l.type === 'ctx') { l.oldNo = o++; l.newNo = n++ } else if (l.type === 'del') { l.oldNo = o++ } else if (l.type === 'add') { l.newNo = n++ }
     }
+    markIntraline(h)
   }
   return { hunks, adds, dels }
+}
+
+// Word-level highlight: pair the k-th del with the k-th add of each del/add
+// run, find the common prefix/suffix, mark the changed region in between.
+function markIntraline (hunk) {
+  const lines = hunk.lines
+  let i = 0
+  while (i < lines.length) {
+    if (lines[i].type !== 'del') { i++; continue }
+    const dels = []
+    const adds = []
+    while (i < lines.length && lines[i].type === 'del') dels.push(lines[i++])
+    while (i < lines.length && lines[i].type === 'add') adds.push(lines[i++])
+    const n = Math.min(dels.length, adds.length)
+    for (let k = 0; k < n; k++) {
+      const a = dels[k].text
+      const b = adds[k].text
+      if (a === b) continue
+      const max = Math.min(a.length, b.length)
+      let p = 0
+      while (p < max && a[p] === b[p]) p++
+      let s = 0
+      while (s < max - p && a[a.length - 1 - s] === b[b.length - 1 - s]) s++
+      if (p === 0 && s === 0) continue // nothing in common — whole-line change
+      dels[k].hl = [p, a.length - s]
+      adds[k].hl = [p, b.length - s]
+    }
+  }
+}
+
+// code cell HTML with optional intra-line changed-region span
+function codeHTML (l) {
+  if (!l.hl) return esc(l.text)
+  const [a, b] = l.hl
+  if (a >= b) return esc(l.text) // empty region (pure insertion on the other side)
+  const cls = l.type === 'add' ? 'word-add' : 'word-del'
+  return esc(l.text.slice(0, a)) + `<span class="${cls}">` + esc(l.text.slice(a, b)) + '</span>' + esc(l.text.slice(b))
 }
 
 // ---------------------------------------------------------------------------
@@ -453,7 +491,7 @@ function renderUnified (hunk, hi, selectable) {
     tr.innerHTML = `
       <td class="lineno">${l.oldNo ?? ''}</td>
       <td class="lineno">${l.newNo ?? ''}</td>
-      <td class="code"><span class="sign">${sign}</span>${esc(l.text)}</td>`
+      <td class="code"><span class="sign">${sign}</span>${codeHTML(l)}</td>`
     if (selectable && (l.type === 'add' || l.type === 'del')) {
       tr.classList.add('selectable')
       tr.dataset.h = hi
@@ -495,9 +533,9 @@ function renderSplit (hunk, hi, selectable) {
     const rCls = r.right ? (r.right.type === 'add' ? 'add' : 'ctx') : 'empty'
     tr.innerHTML = `
       <td class="lineno ${lCls === 'del' ? 'num-del' : ''}">${r.left?.oldNo ?? ''}</td>
-      <td class="code ${lCls === 'del' ? 'cell-del' : lCls === 'empty' ? 'cell-empty' : ''}">${r.left ? `<span class="sign">${r.left.type === 'del' ? '−' : ' '}</span>${esc(r.left.text)}` : ''}</td>
+      <td class="code ${lCls === 'del' ? 'cell-del' : lCls === 'empty' ? 'cell-empty' : ''}">${r.left ? `<span class="sign">${r.left.type === 'del' ? '−' : ' '}</span>${codeHTML(r.left)}` : ''}</td>
       <td class="lineno ${rCls === 'add' ? 'num-add' : ''}">${r.right?.newNo ?? ''}</td>
-      <td class="code ${rCls === 'add' ? 'cell-add' : rCls === 'empty' ? 'cell-empty' : ''}">${r.right ? `<span class="sign">${r.right.type === 'add' ? '+' : ' '}</span>${esc(r.right.text)}` : ''}</td>`
+      <td class="code ${rCls === 'add' ? 'cell-add' : rCls === 'empty' ? 'cell-empty' : ''}">${r.right ? `<span class="sign">${r.right.type === 'add' ? '+' : ' '}</span>${codeHTML(r.right)}` : ''}</td>`
     if (selectable) {
       const tds = tr.children
       if (r.left?.type === 'del') markSelectable(tds[1], hi, r.left.idx)

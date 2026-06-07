@@ -476,6 +476,9 @@ td.cell-empty { background: var(--bg-subtle); }
 
 tr.meta .code { color: var(--fg-muted); font-style: italic; }
 
+.word-add { background: var(--add-word); border-radius: 2px; }
+.word-del { background: var(--del-word); border-radius: 2px; }
+
 .hunk-header {
   display: flex;
   align-items: center;
