@@ -479,6 +479,26 @@ tr.meta .code { color: var(--fg-muted); font-style: italic; }
 .word-add { background: var(--add-word); border-radius: 2px; }
 .word-del { background: var(--del-word); border-radius: 2px; }
 
+/* ---------- expand context ---------- */
+.expander button {
+  appearance: none;
+  display: block;
+  width: 100%;
+  border: none;
+  border-top: 1px solid var(--border-muted);
+  border-bottom: 1px solid var(--border-muted);
+  background: var(--bg-subtle);
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 3px 14px;
+  text-align: left;
+  cursor: pointer;
+}
+.expander button:hover { background: var(--accent-bg); color: var(--accent); }
+.expander button:disabled { opacity: .5; cursor: default; }
+.expander .dots { letter-spacing: 2px; margin-right: 6px; }
+
 .hunk-header {
   display: flex;
   align-items: center;

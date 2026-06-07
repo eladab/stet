@@ -355,6 +355,43 @@ async function apiHunk (body) {
   return { ok: true }
 }
 
+// Unchanged lines around hunks, for "expand context". Reads the *new* side
+// of the corresponding diff — gap lines are identical on both sides.
+async function apiFileLines (q) {
+  const file = safeRepoPath(q.get('file'))
+  if (!file) throw httpErr(400, 'invalid file path')
+  const where = q.get('where')
+  const from = Math.max(1, Number(q.get('from')) || 1)
+  let to = Number(q.get('to')) || 0 // 0 = to EOF
+
+  let content
+  try {
+    if (where === 'unstaged') {
+      content = fs.readFileSync(path.join(REPO, file), 'utf8')
+    } else if (where === 'staged') {
+      content = (await git(['show', `:0:${file}`])).stdout
+    } else if (where === 'branch') {
+      content = (await git(['show', `HEAD:${file}`])).stdout
+    } else if (where === 'commit') {
+      const sha = safeRef(q.get('sha'))
+      if (!sha) throw httpErr(400, 'invalid sha')
+      content = (await git(['show', `${sha}:${file}`])).stdout
+    } else {
+      throw httpErr(400, 'invalid where')
+    }
+  } catch (e) {
+    if (e.status) throw e
+    throw httpErr(404, 'file not available at that revision')
+  }
+
+  const lines = content.split('\n')
+  if (lines[lines.length - 1] === '') lines.pop() // drop trailing-newline artifact
+  const total = lines.length
+  if (!to || to > total) to = total
+  if (to - from + 1 > 5000) to = from + 4999 // sanity cap
+  return { total, from, lines: from > to ? [] : lines.slice(from - 1, to) }
+}
+
 async function apiPoll () {
   const [{ stdout: st }, head] = await Promise.all([
     git(['status', '--porcelain', '-z']),
@@ -430,6 +467,7 @@ const server = http.createServer(async (req, res) => {
         if (url.pathname === '/api/branch') return sendJSON(res, 200, await apiBranch(url.searchParams))
         if (url.pathname === '/api/commitdiff') return sendJSON(res, 200, await apiCommitDiff(url.searchParams))
         if (url.pathname === '/api/poll') return sendJSON(res, 200, await apiPoll())
+        if (url.pathname === '/api/filelines') return sendJSON(res, 200, await apiFileLines(url.searchParams))
         if (url.pathname === '/api/lastcommit') return sendJSON(res, 200, await apiLastCommit())
       } else if (req.method === 'POST') {
         const body = await readBody(req)

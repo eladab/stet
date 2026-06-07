@@ -430,10 +430,23 @@ function makeFileCard (where, file, parsed, binary) {
     card.insertAdjacentHTML('beforeend', '<div class="nodiff-note">No textual changes (mode change or empty file)</div>')
   } else {
     const selectable = where === 'staged' || where === 'unstaged'
+    const canExpand = where !== 'untracked'
+    let prevNewEnd = 0
+    let prevDelta = 0 // (old - new) line offset after the previous hunk
     parsed.hunks.forEach((hunk, hi) => {
+      if (canExpand && hunk.newStart > prevNewEnd + 1) {
+        card.appendChild(expander(where, file, prevNewEnd + 1, hunk.newStart - 1, hunk.oldStart - hunk.newStart))
+      }
       card.appendChild(renderHunkHeader(where, file, hunk))
       card.appendChild(state.view === 'split' ? renderSplit(hunk, hi, selectable) : renderUnified(hunk, hi, selectable))
+      const newCount = hunk.lines.filter(l => l.type === 'ctx' || l.type === 'add').length
+      const oldCount = hunk.lines.filter(l => l.type === 'ctx' || l.type === 'del').length
+      prevNewEnd = hunk.newStart + newCount - 1
+      prevDelta = (hunk.oldStart + oldCount - 1) - prevNewEnd
     })
+    if (canExpand && parsed.hunks.length) {
+      card.appendChild(expander(where, file, Math.max(1, prevNewEnd + 1), 0, prevDelta)) // 0 = to EOF
+    }
   }
   return card
 }
@@ -455,6 +468,55 @@ function fileActionsFor (where, file) {
     ]
   }
   return [] // branch tab: read-only
+}
+
+// ---------------------------------------------------------------------------
+// Expand context — fetch unchanged lines hidden between/around hunks
+// ---------------------------------------------------------------------------
+function expander (where, file, fromNew, toNew, deltaOld) {
+  const el = document.createElement('div')
+  el.className = 'expander'
+  const btn = document.createElement('button')
+  const n = toNew ? toNew - fromNew + 1 : null
+  btn.innerHTML = n
+    ? `<span class="dots">⋯</span> ${n} unchanged line${n > 1 ? 's' : ''}`
+    : '<span class="dots">⋯</span> expand to end of file'
+  btn.onclick = async () => {
+    btn.disabled = true
+    try {
+      let url = `/api/filelines?where=${encodeURIComponent(where)}&file=${encodeURIComponent(file)}&from=${fromNew}${toNew ? `&to=${toNew}` : ''}`
+      if (where === 'commit') url += `&sha=${encodeURIComponent(state.selected.file)}`
+      const data = await api(url)
+      if (!data.lines.length) { el.remove(); return }
+      el.replaceWith(ctxTable(data.lines, data.from, deltaOld))
+    } catch (e) {
+      if (e.status === 404) { el.remove(); return } // file gone at that revision (e.g. deleted)
+      btn.disabled = false
+      toast(`Expand failed: ${e.message}`, { error: true, detail: e.detail })
+    }
+  }
+  el.appendChild(btn)
+  return el
+}
+
+function ctxTable (lines, fromNew, deltaOld) {
+  const table = document.createElement('table')
+  table.className = 'diff-table'
+  const tbody = document.createElement('tbody')
+  lines.forEach((text, i) => {
+    const newNo = fromNew + i
+    const oldNo = newNo + deltaOld
+    const tr = document.createElement('tr')
+    tr.className = 'ctx'
+    tr.innerHTML = state.view === 'split'
+      ? `<td class="lineno">${oldNo}</td><td class="code"><span class="sign"> </span>${esc(text)}</td>
+         <td class="lineno">${newNo}</td><td class="code"><span class="sign"> </span>${esc(text)}</td>`
+      : `<td class="lineno">${oldNo}</td><td class="lineno">${newNo}</td>
+         <td class="code"><span class="sign"> </span>${esc(text)}</td>`
+    tbody.appendChild(tr)
+  })
+  table.appendChild(tbody)
+  return table
 }
 
 function renderHunkHeader (where, file, hunk) {
