@@ -19,7 +19,13 @@ const state = {
   etag: null,
   navList: [],            // flattened [{where, file}] in sidebar order
   hunks: [],              // raw hunk text of the open diff
-  hunkFocus: null         // focused hunk index, or null = file level
+  hunkFocus: null,        // focused hunk index, or null = file level
+  parsedHunks: [],        // parsed hunk objects of the open diff (for line selection)
+  sel: new Set(),         // selected line keys "hunkIdx:lineIdx"
+  selAnchor: null,        // last plain-clicked key, for shift-click ranges
+  visual: false,          // keyboard visual-line mode active
+  visAnchor: -1,          // visual mode anchor (index into selectable els)
+  visCursor: -1           // visual mode cursor
 }
 
 // ---------------------------------------------------------------------------
@@ -352,8 +358,10 @@ function renderCommit (data) {
 function renderDiff (where, file, data) {
   diffContainer.textContent = ''
   state.hunkFocus = null
+  clearLineSel()
   const parsed = data.binary ? { hunks: [], adds: 0, dels: 0 } : parseDiff(data.diff)
   state.hunks = parsed.hunks.map(h => h.raw.join('\n') + '\n')
+  state.parsedHunks = parsed.hunks
   diffContainer.appendChild(makeFileCard(where, file, parsed, data.binary))
 }
 
@@ -383,10 +391,11 @@ function makeFileCard (where, file, parsed, binary) {
   } else if (!parsed.hunks.length) {
     card.insertAdjacentHTML('beforeend', '<div class="nodiff-note">No textual changes (mode change or empty file)</div>')
   } else {
-    for (const hunk of parsed.hunks) {
+    const selectable = where === 'staged' || where === 'unstaged'
+    parsed.hunks.forEach((hunk, hi) => {
       card.appendChild(renderHunkHeader(where, file, hunk))
-      card.appendChild(state.view === 'split' ? renderSplit(hunk) : renderUnified(hunk))
-    }
+      card.appendChild(state.view === 'split' ? renderSplit(hunk, hi, selectable) : renderUnified(hunk, hi, selectable))
+    })
   }
   return card
 }
@@ -433,11 +442,11 @@ function renderHunkHeader (where, file, hunk) {
   return el
 }
 
-function renderUnified (hunk) {
+function renderUnified (hunk, hi, selectable) {
   const table = document.createElement('table')
   table.className = 'diff-table'
   const tbody = document.createElement('tbody')
-  for (const l of hunk.lines) {
+  hunk.lines.forEach((l, li) => {
     const tr = document.createElement('tr')
     tr.className = l.type
     const sign = l.type === 'add' ? '+' : l.type === 'del' ? '−' : ' '
@@ -445,17 +454,23 @@ function renderUnified (hunk) {
       <td class="lineno">${l.oldNo ?? ''}</td>
       <td class="lineno">${l.newNo ?? ''}</td>
       <td class="code"><span class="sign">${sign}</span>${esc(l.text)}</td>`
+    if (selectable && (l.type === 'add' || l.type === 'del')) {
+      tr.classList.add('selectable')
+      tr.dataset.h = hi
+      tr.dataset.l = li
+      if (state.sel.has(`${hi}:${li}`)) tr.classList.add('linesel')
+    }
     tbody.appendChild(tr)
-  }
+  })
   table.appendChild(tbody)
   return table
 }
 
-function renderSplit (hunk) {
+function renderSplit (hunk, hi, selectable) {
   // pair deletion-runs with insertion-runs; mirror context lines
   const rows = []
   let i = 0
-  const lines = hunk.lines.filter(l => l.type !== 'meta')
+  const lines = hunk.lines.map((l, idx) => ({ ...l, idx })).filter(l => l.type !== 'meta')
   while (i < lines.length) {
     const l = lines[i]
     if (l.type === 'ctx') {
@@ -483,6 +498,11 @@ function renderSplit (hunk) {
       <td class="code ${lCls === 'del' ? 'cell-del' : lCls === 'empty' ? 'cell-empty' : ''}">${r.left ? `<span class="sign">${r.left.type === 'del' ? '−' : ' '}</span>${esc(r.left.text)}` : ''}</td>
       <td class="lineno ${rCls === 'add' ? 'num-add' : ''}">${r.right?.newNo ?? ''}</td>
       <td class="code ${rCls === 'add' ? 'cell-add' : rCls === 'empty' ? 'cell-empty' : ''}">${r.right ? `<span class="sign">${r.right.type === 'add' ? '+' : ' '}</span>${esc(r.right.text)}` : ''}</td>`
+    if (selectable) {
+      const tds = tr.children
+      if (r.left?.type === 'del') markSelectable(tds[1], hi, r.left.idx)
+      if (r.right?.type === 'add') markSelectable(tds[3], hi, r.right.idx)
+    }
     tbody.appendChild(tr)
   }
   table.appendChild(tbody)
@@ -540,6 +560,193 @@ async function busy (fn, errMsg) {
     document.body.classList.remove('busy')
   }
 }
+
+// ---------------------------------------------------------------------------
+// Line-level selection — click / shift-click, V visual mode
+// ---------------------------------------------------------------------------
+const lineBar = $('line-bar')
+
+function markSelectable (el, hi, li) {
+  el.classList.add('selectable')
+  el.dataset.h = hi
+  el.dataset.l = li
+  if (state.sel.has(`${hi}:${li}`)) el.classList.add('linesel')
+}
+
+function selKey (el) { return `${el.dataset.h}:${el.dataset.l}` }
+function selectableEls () { return [...diffContainer.querySelectorAll('.selectable')] }
+
+function setLineSel (el, on) {
+  const k = selKey(el)
+  if (on) state.sel.add(k); else state.sel.delete(k)
+  // the same logical line may render as several elements (never today, but cheap)
+  for (const e of diffContainer.querySelectorAll(`.selectable[data-h="${el.dataset.h}"][data-l="${el.dataset.l}"]`)) {
+    e.classList.toggle('linesel', on)
+  }
+}
+
+function clearLineSel () {
+  state.sel.clear()
+  state.selAnchor = null
+  state.visual = false
+  state.visAnchor = state.visCursor = -1
+  for (const e of diffContainer.querySelectorAll('.linesel')) e.classList.remove('linesel')
+  for (const e of diffContainer.querySelectorAll('.linecur')) e.classList.remove('linecur')
+  if (lineBar) updateLineBar()
+}
+
+function updateLineBar () {
+  const n = state.sel.size
+  const s = state.selected
+  if (!n || !s || (s.where !== 'staged' && s.where !== 'unstaged')) { lineBar.hidden = true; return }
+  lineBar.hidden = false
+  $('line-bar-count').textContent = `${n} line${n > 1 ? 's' : ''} selected`
+  const actions = $('line-bar-actions')
+  actions.textContent = ''
+  const mk = (label, op, cls) => {
+    const b = document.createElement('button')
+    b.className = 'btn' + (cls ? ' ' + cls : '')
+    b.textContent = label
+    b.onclick = () => lineAction(op)
+    actions.appendChild(b)
+  }
+  if (s.where === 'unstaged') {
+    mk('Stage lines', 'stage', 'btn-primary')
+    mk('Discard lines', 'discard', 'btn-danger')
+  } else {
+    mk('Unstage lines', 'unstage')
+  }
+}
+
+diffContainer.addEventListener('mousedown', e => {
+  // shift-click selects a range — suppress the native text selection
+  if (e.shiftKey && e.target.closest('.selectable')) e.preventDefault()
+})
+
+diffContainer.addEventListener('click', e => {
+  if (e.target.closest('button')) return
+  const el = e.target.closest('.selectable')
+  if (!el) return
+  exitVisual()
+  const els = selectableEls()
+  if (e.shiftKey && state.selAnchor) {
+    const a = els.findIndex(x => selKey(x) === state.selAnchor)
+    const b = els.indexOf(el)
+    if (a !== -1 && b !== -1) {
+      const [lo, hi] = a < b ? [a, b] : [b, a]
+      for (let i = lo; i <= hi; i++) setLineSel(els[i], true)
+    }
+  } else {
+    setLineSel(el, !state.sel.has(selKey(el)))
+    state.selAnchor = selKey(el)
+  }
+  updateLineBar()
+})
+
+// --- V visual mode: anchor + cursor over the flat list of selectable lines
+function enterVisual () {
+  const els = selectableEls()
+  if (!els.length) return
+  let start = 0
+  if (state.hunkFocus != null) {
+    const i = els.findIndex(el => Number(el.dataset.h) === state.hunkFocus)
+    if (i !== -1) start = i
+  }
+  state.visual = true
+  state.visAnchor = state.visCursor = start
+  applyVisual(els)
+}
+
+function moveVisual (delta) {
+  const els = selectableEls()
+  if (!els.length) return
+  state.visCursor = Math.max(0, Math.min(els.length - 1, state.visCursor + delta))
+  applyVisual(els)
+  els[state.visCursor].scrollIntoView({ block: 'nearest' })
+}
+
+function applyVisual (els) {
+  state.sel.clear()
+  const [lo, hi] = state.visAnchor < state.visCursor
+    ? [state.visAnchor, state.visCursor]
+    : [state.visCursor, state.visAnchor]
+  els.forEach((el, i) => {
+    const on = i >= lo && i <= hi
+    el.classList.toggle('linesel', on)
+    el.classList.toggle('linecur', i === state.visCursor)
+    if (on) state.sel.add(selKey(el))
+  })
+  updateLineBar()
+}
+
+function exitVisual () {
+  state.visual = false
+  for (const e of diffContainer.querySelectorAll('.linecur')) e.classList.remove('linecur')
+}
+
+// --- partial-hunk patch construction (git add -p "edit" rules)
+// forward (stage):           drop unselected "+", turn unselected "-" into context
+// reverse (unstage/discard): turn unselected "+" into context, drop unselected "-"
+function partialHunk (hunk, selected, forward) {
+  const out = []
+  let kept = 0
+  let lastEmitted = false
+  hunk.lines.forEach((l, i) => {
+    if (l.type === 'ctx') { out.push(' ' + l.text); lastEmitted = true; return }
+    if (l.type === 'meta') { if (lastEmitted) out.push(l.text); return }
+    const sel = selected.has(i)
+    if (l.type === 'add') {
+      if (sel) { out.push('+' + l.text); kept++; lastEmitted = true } else if (!forward) { out.push(' ' + l.text); lastEmitted = true } else lastEmitted = false
+    } else { // del
+      if (sel) { out.push('-' + l.text); kept++; lastEmitted = true } else if (forward) { out.push(' ' + l.text); lastEmitted = true } else lastEmitted = false
+    }
+  })
+  if (!kept) return null
+  return hunk.header + '\n' + out.join('\n') + '\n'
+}
+
+function buildPartialPatch (forward) {
+  const byHunk = new Map()
+  for (const key of state.sel) {
+    const [h, l] = key.split(':').map(Number)
+    if (!byHunk.has(h)) byHunk.set(h, new Set())
+    byHunk.get(h).add(l)
+  }
+  const parts = []
+  for (const h of [...byHunk.keys()].sort((a, b) => a - b)) {
+    const hunk = state.parsedHunks[h]
+    if (!hunk) continue
+    const p = partialHunk(hunk, byHunk.get(h), forward)
+    if (p) parts.push(p)
+  }
+  return parts.length ? parts.join('') : null
+}
+
+async function lineAction (op) {
+  const s = state.selected
+  if (!s || !state.sel.size) return
+  if (op === 'discard') {
+    const n = state.sel.size
+    const ok = await confirmModal(
+      'Discard selected lines?',
+      `${n} selected line${n > 1 ? 's' : ''} in "${s.file}" will be permanently lost.`
+    )
+    if (!ok) return
+  }
+  const patch = buildPartialPatch(op === 'stage')
+  if (!patch) return
+  await busy(async () => {
+    try {
+      await api('/api/hunk', { op, file: s.file, hunk: patch })
+    } catch (e) {
+      if (e.status === 409) toast('Selection is stale — diff refreshed', { error: true })
+      else throw e
+    }
+    await refresh({ keepSelection: true })
+  }, `${op} lines failed`)
+}
+
+$('line-bar-clear').onclick = () => clearLineSel()
 
 // ---------------------------------------------------------------------------
 // Commit panel
@@ -760,6 +967,12 @@ function kbAction (intent) {
   if (op === 'unstage' && s.where !== 'staged') return
   if (op === 'discard' && s.where === 'staged') { toast('Unstage first, then discard'); return }
 
+  // line selection takes priority over hunk focus
+  if (state.sel.size) {
+    exitVisual()
+    return lineAction(op)
+  }
+
   if (hunk && s.where !== 'untracked') {
     if (op === 'discard') return hunkAction('discard', s.where, s.file, hunk, true)
     return hunkAction(op, s.where, s.file, hunk)
@@ -804,8 +1017,14 @@ document.addEventListener('keydown', e => {
   pendingG = false
 
   switch (e.key) {
-    case 'j': case 'ArrowDown': e.preventDefault(); moveSelection(1); break
-    case 'k': case 'ArrowUp': e.preventDefault(); moveSelection(-1); break
+    case 'j': case 'ArrowDown':
+      e.preventDefault()
+      if (state.visual) moveVisual(1); else moveSelection(1)
+      break
+    case 'k': case 'ArrowUp':
+      e.preventDefault()
+      if (state.visual) moveVisual(-1); else moveSelection(-1)
+      break
     case 'g':
       pendingG = true
       pendingGTimer = setTimeout(() => { pendingG = false }, 600)
@@ -813,7 +1032,11 @@ document.addEventListener('keydown', e => {
     case 'G': e.preventDefault(); navTo(state.navList.length - 1); break
     case ']': e.preventDefault(); focusHunk(1); break
     case '[': e.preventDefault(); focusHunk(-1); break
-    case 'Escape': clearHunkFocus(); break
+    case 'V': e.preventDefault(); if (!state.visual) enterVisual(); else { exitVisual(); clearLineSel() } break
+    case 'Escape':
+      if (state.visual || state.sel.size) clearLineSel()
+      else clearHunkFocus()
+      break
     case 's': e.preventDefault(); kbAction('stage'); break
     case 'u': e.preventDefault(); kbAction('unstage'); break
     case ' ': e.preventDefault(); kbAction('toggle'); break

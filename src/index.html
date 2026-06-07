@@ -60,6 +60,11 @@
         <p>Select a file to view its diff</p>
       </div>
       <div id="diff-container" hidden></div>
+      <div class="line-bar" id="line-bar" hidden>
+        <span class="line-bar-count" id="line-bar-count"></span>
+        <span class="line-bar-actions" id="line-bar-actions"></span>
+        <button class="btn" id="line-bar-clear" title="Clear selection (Esc)">Clear</button>
+      </div>
     </main>
   </div>
 
@@ -91,11 +96,13 @@
           <tr><td><kbd>b</kbd></td><td>select base branch</td></tr>
         </table>
         <table class="help-table">
-          <tr><th colspan="2">Actions <span class="help-note">(file, or focused hunk)</span></th></tr>
+          <tr><th colspan="2">Actions <span class="help-note">(file, focused hunk, or selected lines)</span></th></tr>
           <tr><td><kbd>s</kbd></td><td>stage</td></tr>
           <tr><td><kbd>u</kbd></td><td>unstage</td></tr>
           <tr><td><kbd>Space</kbd></td><td>toggle stage / unstage</td></tr>
           <tr><td><kbd>d</kbd></td><td>discard (with confirm)</td></tr>
+          <tr><td><kbd>V</kbd></td><td>select lines (visual mode, <kbd>j</kbd>/<kbd>k</kbd> extends)</td></tr>
+          <tr><td>click / <kbd>⇧</kbd>click</td><td>select line / range</td></tr>
           <tr><td><kbd>c</kbd></td><td>focus commit message</td></tr>
           <tr><td><kbd>⌘</kbd><kbd>Enter</kbd></td><td>commit (from message field)</td></tr>
           <tr><th colspan="2">General</th></tr>

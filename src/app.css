@@ -557,6 +557,38 @@ kbd {
   outline-offset: -2px;
 }
 
+/* ---------- line selection ---------- */
+tr.selectable, td.selectable { cursor: pointer; }
+tr.linesel > td,
+td.linesel {
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--accent) 22%, transparent),
+    color-mix(in srgb, var(--accent) 22%, transparent)
+  );
+}
+tr.linecur > td.code, td.linecur {
+  outline: 1px dashed var(--accent);
+  outline-offset: -1px;
+}
+
+.line-bar {
+  position: fixed;
+  bottom: 18px;
+  left: calc(50% + 150px); /* center within the main pane (sidebar is 300px) */
+  transform: translateX(-50%);
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  box-shadow: var(--shadow);
+}
+.line-bar-count { font-size: 12px; color: var(--fg-muted); white-space: nowrap; }
+.line-bar-actions { display: flex; gap: 6px; }
+
 /* ---------- toasts ---------- */
 .toasts {
   position: fixed;
