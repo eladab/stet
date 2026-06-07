@@ -20,6 +20,8 @@ import { execFile, execFileSync, spawn } from 'node:child_process'
 
 // Injected by build.mjs in the single-file dist; null in dev (read from disk).
 let ASSETS = null /* @embed-assets */
+// Build provenance ({ commit, date, srcDir }); null in dev.
+let BUILD = null /* @embed-build */
 
 // In the built binary we run from a data: URL via the CJS trampoline, which
 // stashes the real file path in globalThis first. In dev, import.meta works.
@@ -37,6 +39,8 @@ function parseArgs (argv) {
     else if (argv[i] === '--fg') args.fg = true
     else if (argv[i] === '--idle') args.idle = Number(argv[++i])
     else if (argv[i] === '--no-open') args.noOpen = true
+    else if (argv[i] === '--update') args.update = true
+    else if (argv[i] === '--version' || argv[i] === '-v') args.version = true
     else if (argv[i] === '--help' || argv[i] === '-h') args.help = true
     else if (!argv[i].startsWith('-')) args._.push(argv[i])
   }
@@ -46,7 +50,49 @@ function parseArgs (argv) {
 const args = parseArgs(process.argv.slice(2))
 if (args.help) {
   console.log('usage: stet [path-inside-repo] [--port N] [--no-open] [--fg] [--idle SECS]')
-  console.log('  --idle: shut down after N seconds without browser contact (default 120, 0 = never)')
+  console.log('  --idle:    shut down after N seconds without browser contact (default 120, 0 = never)')
+  console.log('  --update:  pull the source checkout and reinstall this binary')
+  console.log('  --version: print build version')
+  process.exit(0)
+}
+if (args.version) {
+  console.log(BUILD ? `stet ${BUILD.commit} (${BUILD.date})` : 'stet dev (running from source)')
+  process.exit(0)
+}
+if (args.update) {
+  if (!BUILD) {
+    console.error('stet: running from source — update with: git pull && ./install.sh')
+    process.exit(1)
+  }
+  const srcDir = BUILD.srcDir
+  if (!fs.existsSync(path.join(srcDir, 'install.sh')) || !fs.existsSync(path.join(srcDir, '.git'))) {
+    console.error(`stet: source checkout not found at ${srcDir}`)
+    console.error('stet: re-clone the stet repository and run ./install.sh')
+    process.exit(1)
+  }
+  try {
+    execFileSync('git', ['-C', srcDir, 'pull', '--ff-only'], { stdio: 'inherit' })
+  } catch {
+    console.error('stet: git pull failed — resolve manually in ' + srcDir)
+    process.exit(1)
+  }
+  // install over the binary that is actually running, wherever it lives
+  const binDir = path.dirname(fs.realpathSync(SELF))
+  try {
+    execFileSync('sh', [path.join(srcDir, 'install.sh')], {
+      stdio: 'inherit',
+      env: { ...process.env, STET_BIN_DIR: binDir }
+    })
+  } catch {
+    console.error('stet: install failed')
+    process.exit(1)
+  }
+  try {
+    const now = execFileSync('git', ['-C', srcDir, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8' }).trim()
+    console.log(now === BUILD.commit
+      ? `stet: already up to date (${now})`
+      : `stet: updated ${BUILD.commit} → ${now}`)
+  } catch {}
   process.exit(0)
 }
 const repoArg = args.repo || args._[0]

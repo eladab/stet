@@ -14,6 +14,17 @@ Requires Node.js ≥ 18 and git.
 ./install.sh            # builds dist/stet and copies it to ~/.local/bin/stet
 ```
 
+## Update
+
+```sh
+stet --update           # git pull in your checkout, rebuild, reinstall
+stet --version          # show the installed build (commit + date)
+```
+
+`--update` uses the source checkout the binary was built from (`git pull --ff-only`
++ `install.sh`), reinstalling over the running binary's location. If you've deleted
+the checkout, clone it again and run `./install.sh`.
+
 ## Use
 
 ```sh
