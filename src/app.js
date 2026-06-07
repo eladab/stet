@@ -16,6 +16,8 @@ const state = {
   work: null,             // /api/state payload
   branch: null,           // /api/branch payload
   base: null,             // user-selected comparison base (null = server default)
+  includeWt: false,       // branch tab: compare base against working tree, not HEAD
+  filter: '',             // sidebar fuzzy filter
   etag: null,
   navList: [],            // flattened [{where, file}] in sidebar order
   hunks: [],              // raw hunk text of the open diff
@@ -207,11 +209,19 @@ function fileRow ({ entry, where, actions }) {
   return row
 }
 
-function group (title, entries, where, makeActions) {
+function group (title, entries, where, makeActions, headerActions = []) {
   const frag = document.createDocumentFragment()
   const h = document.createElement('div')
   h.className = 'group-header'
-  h.innerHTML = `${title} <span class="count">${entries.length}</span>`
+  h.innerHTML = `${title} <span class="count">${entries.length}</span><span class="spacer"></span>`
+  for (const a of headerActions) {
+    const b = document.createElement('button')
+    b.className = 'group-action'
+    b.textContent = a.label
+    b.title = a.title || a.label
+    b.onclick = a.run
+    h.appendChild(b)
+  }
   frag.appendChild(h)
   for (const e of entries) {
     frag.appendChild(fileRow({ entry: e, where, actions: makeActions(e) }))
@@ -219,17 +229,42 @@ function group (title, entries, where, makeActions) {
   return frag
 }
 
+// case-insensitive subsequence match ("srv" matches "src/server.mjs")
+function fmatch (s) {
+  const q = state.filter.toLowerCase()
+  if (!q) return true
+  let i = 0
+  for (const c of s.toLowerCase()) if (c === q[i]) i++
+  return i >= q.length
+}
+
+function visWork () {
+  const w = state.work
+  const f = l => state.filter ? l.filter(e => fmatch(e.path)) : l
+  return { staged: f(w.staged), unstaged: f(w.unstaged), untracked: f(w.untracked) }
+}
+
+function visBranch () {
+  const b = state.branch
+  return {
+    files: state.filter ? b.files.filter(e => fmatch(e.path)) : b.files,
+    commits: state.filter ? b.commits.filter(c => fmatch(c.subject) || fmatch(c.short)) : b.commits
+  }
+}
+
 function buildNavList () {
   state.navList = []
   if (state.tab === 'work') {
-    const w = state.work
-    if (!w) return
-    for (const e of w.staged) state.navList.push({ where: 'staged', file: e.path })
-    for (const e of w.unstaged) state.navList.push({ where: 'unstaged', file: e.path })
-    for (const e of w.untracked) state.navList.push({ where: 'untracked', file: e.path })
+    if (!state.work) return
+    const v = visWork()
+    for (const e of v.staged) state.navList.push({ where: 'staged', file: e.path })
+    for (const e of v.unstaged) state.navList.push({ where: 'unstaged', file: e.path })
+    for (const e of v.untracked) state.navList.push({ where: 'untracked', file: e.path })
   } else {
-    for (const c of state.branch?.commits || []) state.navList.push({ where: 'commit', file: c.sha })
-    for (const e of state.branch?.files || []) state.navList.push({ where: 'branch', file: e.path })
+    if (!state.branch) return
+    const v = visBranch()
+    for (const c of v.commits) state.navList.push({ where: 'commit', file: c.sha })
+    for (const e of v.files) state.navList.push({ where: 'branch', file: e.path })
   }
 }
 
@@ -245,21 +280,32 @@ function renderSidebar () {
       fileList.innerHTML = '<div class="sidebar-empty">Working tree clean ✨</div>'
       return
     }
-    if (w.staged.length) {
-      fileList.appendChild(group('Staged', w.staged, 'staged', e => [
+    const v = visWork()
+    if (state.filter && !v.staged.length && !v.unstaged.length && !v.untracked.length) {
+      fileList.innerHTML = `<div class="sidebar-empty">No files match “${esc(state.filter)}”</div>`
+      return
+    }
+    if (v.staged.length) {
+      fileList.appendChild(group('Staged', v.staged, 'staged', e => [
         { kind: 'unstage', title: 'Unstage file', run: () => fileAction('unstage', e.path) }
+      ], [
+        { label: 'unstage all', title: 'Unstage all listed files (U)', run: () => filesAction('unstage', v.staged.map(f => f.path)) }
       ]))
     }
-    if (w.unstaged.length) {
-      fileList.appendChild(group('Changes', w.unstaged, 'unstaged', e => [
+    if (v.unstaged.length) {
+      fileList.appendChild(group('Changes', v.unstaged, 'unstaged', e => [
         { kind: 'stage', title: 'Stage file', run: () => fileAction('stage', e.path) },
         { kind: 'discard', title: 'Discard changes', run: () => discardFile(e.path, false) }
+      ], [
+        { label: 'stage all', title: 'Stage all listed files (S)', run: () => filesAction('stage', v.unstaged.map(f => f.path)) }
       ]))
     }
-    if (w.untracked.length) {
-      fileList.appendChild(group('Untracked', w.untracked, 'untracked', e => [
+    if (v.untracked.length) {
+      fileList.appendChild(group('Untracked', v.untracked, 'untracked', e => [
         { kind: 'stage', title: 'Stage file', run: () => fileAction('stage', e.path) },
         { kind: 'discard', title: 'Delete file', run: () => discardFile(e.path, true) }
+      ], [
+        { label: 'stage all', title: 'Stage all listed files', run: () => filesAction('stage', v.untracked.map(f => f.path)) }
       ]))
     }
   } else {
@@ -274,8 +320,13 @@ function renderSidebar () {
       fileList.insertAdjacentHTML('beforeend', `<div class="sidebar-empty">No commits vs <b>${esc(b.base)}</b></div>`)
       return
     }
-    if (b.commits.length) fileList.appendChild(commitGroup(b.commits))
-    if (b.files.length) fileList.appendChild(group('Files changed', b.files, 'branch', () => []))
+    const v = visBranch()
+    if (state.filter && !v.commits.length && !v.files.length) {
+      fileList.insertAdjacentHTML('beforeend', `<div class="sidebar-empty">No matches for “${esc(state.filter)}”</div>`)
+      return
+    }
+    if (v.commits.length) fileList.appendChild(commitGroup(v.commits))
+    if (v.files.length) fileList.appendChild(group('Files changed', v.files, 'branch', () => []))
   }
 }
 
@@ -299,6 +350,20 @@ function baseSelector (b) {
   }
   sel.onkeydown = e => { if (e.key === 'Escape') sel.blur() }
   row.appendChild(sel)
+
+  const lbl = document.createElement('label')
+  lbl.className = 'wt-toggle'
+  lbl.title = 'Include uncommitted working tree changes in the comparison'
+  const cb = document.createElement('input')
+  cb.type = 'checkbox'
+  cb.checked = state.includeWt
+  cb.onchange = async () => {
+    state.includeWt = cb.checked
+    state.selected = null
+    await refresh()
+  }
+  lbl.append(cb, document.createTextNode('+wt'))
+  row.appendChild(lbl)
   return row
 }
 
@@ -343,6 +408,7 @@ async function selectFile (where, file) {
     } else {
       let url = `/api/diff?where=${encodeURIComponent(where)}&file=${encodeURIComponent(file)}`
       if (where === 'branch' && state.base) url += `&base=${encodeURIComponent(state.base)}`
+      if (where === 'branch' && state.includeWt) url += '&wt=1'
       const data = await api(url)
       renderDiff(where, file, data)
     }
@@ -484,7 +550,9 @@ function expander (where, file, fromNew, toNew, deltaOld) {
   btn.onclick = async () => {
     btn.disabled = true
     try {
-      let url = `/api/filelines?where=${encodeURIComponent(where)}&file=${encodeURIComponent(file)}&from=${fromNew}${toNew ? `&to=${toNew}` : ''}`
+      // branch+wt compares against the working tree — gap lines live there, not in HEAD
+      const src = (where === 'branch' && state.includeWt) ? 'unstaged' : where
+      let url = `/api/filelines?where=${encodeURIComponent(src)}&file=${encodeURIComponent(file)}&from=${fromNew}${toNew ? `&to=${toNew}` : ''}`
       if (where === 'commit') url += `&sha=${encodeURIComponent(state.selected.file)}`
       const data = await api(url)
       if (!data.lines.length) { el.remove(); return }
@@ -615,6 +683,14 @@ function renderSplit (hunk, hi, selectable) {
 async function fileAction (op, file) {
   await busy(async () => {
     await api(`/api/${op}`, { file })
+    await refresh({ keepSelection: true })
+  }, `${op} failed`)
+}
+
+async function filesAction (op, files) {
+  if (!files.length) return
+  await busy(async () => {
+    await api(`/api/${op}`, { files })
     await refresh({ keepSelection: true })
   }, `${op} failed`)
 }
@@ -942,7 +1018,10 @@ function whereStillExists () {
 }
 
 async function refresh ({ keepSelection = false } = {}) {
-  const branchUrl = '/api/branch' + (state.base ? `?base=${encodeURIComponent(state.base)}` : '')
+  const bq = new URLSearchParams()
+  if (state.base) bq.set('base', state.base)
+  if (state.includeWt) bq.set('wt', '1')
+  const branchUrl = '/api/branch' + (bq.size ? `?${bq}` : '')
   const [work, branch] = await Promise.all([api('/api/state'), api(branchUrl).catch(() => null)])
   state.work = work
   state.branch = branch
@@ -993,6 +1072,34 @@ function setView (view) {
   $('view-split').classList.toggle('active', view === 'split')
   if (state.selected) selectFile(state.selected.where, state.selected.file)
 }
+
+// ---------------------------------------------------------------------------
+// Sidebar filter — "/" to open, Esc to clear
+// ---------------------------------------------------------------------------
+const filterRow = $('filter-row')
+const filterInput = $('filter-input')
+
+function openFilter () {
+  filterRow.hidden = false
+  filterInput.focus()
+  filterInput.select()
+}
+
+function clearFilter () {
+  state.filter = ''
+  filterInput.value = ''
+  filterRow.hidden = true
+  filterInput.blur()
+  renderSidebar()
+}
+
+filterInput.addEventListener('input', () => {
+  state.filter = filterInput.value.trim()
+  renderSidebar()
+})
+filterInput.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { e.preventDefault(); clearFilter() } else if (e.key === 'Enter') { e.preventDefault(); filterInput.blur() }
+})
 
 $('tab-work').onclick = () => setTab('work')
 $('tab-branch').onclick = () => setTab('branch')
@@ -1135,7 +1242,22 @@ document.addEventListener('keydown', e => {
     case 'V': e.preventDefault(); if (!state.visual) enterVisual(); else { exitVisual(); clearLineSel() } break
     case 'Escape':
       if (state.visual || state.sel.size) clearLineSel()
-      else clearHunkFocus()
+      else if (state.hunkFocus != null) clearHunkFocus()
+      else if (state.filter) clearFilter()
+      break
+    case '/': e.preventDefault(); openFilter(); break
+    case 'S':
+      if (state.tab === 'work' && state.work) {
+        e.preventDefault()
+        const v = visWork()
+        filesAction('stage', [...v.unstaged, ...v.untracked].map(f => f.path))
+      }
+      break
+    case 'U':
+      if (state.tab === 'work' && state.work) {
+        e.preventDefault()
+        filesAction('unstage', visWork().staged.map(f => f.path))
+      }
       break
     case 's': e.preventDefault(); kbAction('stage'); break
     case 'u': e.preventDefault(); kbAction('unstage'); break

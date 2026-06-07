@@ -38,6 +38,10 @@
 
   <div class="layout">
     <aside class="sidebar" id="sidebar" aria-label="changed files">
+      <div class="filter-row" id="filter-row" hidden>
+        <input id="filter-input" type="text" placeholder="Filter files…" autocomplete="off"
+               spellcheck="false" aria-label="filter files">
+      </div>
       <div class="file-list" id="file-list"></div>
       <form class="commit-panel" id="commit-panel" hidden>
         <div class="subject-wrap">
@@ -89,7 +93,8 @@
           <tr><td><kbd>g g</kbd> / <kbd>G</kbd></td><td>first / last file</td></tr>
           <tr><td><kbd>]</kbd> / <kbd>[</kbd></td><td>next / previous hunk</td></tr>
           <tr><td><kbd>Ctrl</kbd><kbd>d</kbd> / <kbd>Ctrl</kbd><kbd>u</kbd></td><td>scroll half page</td></tr>
-          <tr><td><kbd>Esc</kbd></td><td>clear hunk focus / close</td></tr>
+          <tr><td><kbd>/</kbd></td><td>filter files</td></tr>
+          <tr><td><kbd>Esc</kbd></td><td>clear selection / focus / filter</td></tr>
           <tr><th colspan="2">View</th></tr>
           <tr><td><kbd>1</kbd> / <kbd>2</kbd> / <kbd>Tab</kbd></td><td>working tree / branch</td></tr>
           <tr><td><kbd>v</kbd></td><td>toggle unified / split</td></tr>
@@ -103,6 +108,7 @@
           <tr><td><kbd>d</kbd></td><td>discard (with confirm)</td></tr>
           <tr><td><kbd>V</kbd></td><td>select lines (visual mode, <kbd>j</kbd>/<kbd>k</kbd> extends)</td></tr>
           <tr><td>click / <kbd>⇧</kbd>click</td><td>select line / range</td></tr>
+          <tr><td><kbd>S</kbd> / <kbd>U</kbd></td><td>stage all / unstage all</td></tr>
           <tr><td><kbd>c</kbd></td><td>focus commit message</td></tr>
           <tr><td><kbd>⌘</kbd><kbd>Enter</kbd></td><td>commit (from message field)</td></tr>
           <tr><th colspan="2">General</th></tr>

@@ -260,7 +260,9 @@ async function apiDiff (q) {
     const base = await resolveBase(q.get('base'))
     if (!base) throw httpErr(404, 'no base branch found')
     const { stdout: mb } = await git(['merge-base', base, 'HEAD'])
-    res = await git(['diff', ...DIFF_FLAGS, mb.trim(), 'HEAD', '--', file])
+    // wt=1: diff against the working tree instead of HEAD ("what the PR will look like")
+    const head = q.get('wt') === '1' ? [] : ['HEAD']
+    res = await git(['diff', ...DIFF_FLAGS, mb.trim(), ...head, '--', file])
   } else {
     throw httpErr(400, 'invalid where')
   }
@@ -281,7 +283,8 @@ async function apiBranch (q) {
   const { stdout: mbOut } = await git(['merge-base', base, 'HEAD'])
   const mb = mbOut.trim()
 
-  const { stdout } = await git(['diff', '--name-status', '-z', '--no-color', mb, 'HEAD'])
+  const head = q.get('wt') === '1' ? [] : ['HEAD'] // wt=1 includes uncommitted changes
+  const { stdout } = await git(['diff', '--name-status', '-z', '--no-color', mb, ...head])
   const tokens = stdout.split('\0').filter(Boolean)
   const files = []
   for (let i = 0; i < tokens.length; i++) {
@@ -317,13 +320,14 @@ async function apiCommitDiff (q) {
 }
 
 async function apiFileAction (op, body) {
-  const file = safeRepoPath(body.file)
-  if (!file) throw httpErr(400, 'invalid file path')
-  if (op === 'stage') await git(['add', '--', file])
-  else if (op === 'unstage') await git(['restore', '--staged', '--', file])
+  // single file or a batch — both validated path-by-path
+  const files = (Array.isArray(body.files) ? body.files : [body.file]).map(safeRepoPath)
+  if (!files.length || files.some(f => !f)) throw httpErr(400, 'invalid file path')
+  if (op === 'stage') await git(['add', '--', ...files])
+  else if (op === 'unstage') await git(['restore', '--staged', '--', ...files])
   else if (op === 'discard') {
-    if (body.untracked) await git(['clean', '-f', '--', file])
-    else await git(['restore', '--', file])
+    if (body.untracked) await git(['clean', '-f', '--', ...files])
+    else await git(['restore', '--', ...files])
   } else throw httpErr(400, 'invalid op')
   return { ok: true }
 }
