@@ -2,7 +2,9 @@
 
 *stet* (proofreader's mark: "let it stand") — interactive git staging in the browser.
 A single-file, zero-dependency local web app: review your working tree diff, stage/unstage/discard
-files or hunks, write commits, and compare your branch against its base — with vim-style keybindings.
+files, hunks, or individual lines, write commits, and compare your branch against its base
+(optionally including uncommitted work) — with word-level diff highlighting, expandable
+context, fuzzy file filtering, and vim-style keybindings.
 
 ## Install
 
