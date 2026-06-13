@@ -43,9 +43,17 @@ stops the heartbeat and the server exits on its own after `--idle` seconds.
 ### cmux
 
 Inside [cmux](https://cmux.com), stet auto-detects the pane (via `CMUX_*` env)
-and opens itself in a split WebKit pane — `cmux browser open-split` — instead of
-the OS browser. The pane runs the same UI and heartbeat, so closing it shuts the
-server down just like a browser tab. Use `--browser` to force the OS browser.
+and opens itself in a WebKit pane instead of the OS browser. The pane runs the
+same UI and heartbeat, so closing it shuts the server down just like a browser tab.
+
+```sh
+stet --cmux split       # new split pane (default) — cmux browser open-split
+stet --cmux tab         # a tab in the current pane — cmux open
+stet --browser          # force the OS browser instead
+```
+
+Split orientation follows cmux's own split behaviour (configurable in
+`cmux.json`); `--cmux` only chooses split-vs-tab.
 
 Press `?` in the UI for keyboard shortcuts. Quit with the ⏻ button or `q`.
 

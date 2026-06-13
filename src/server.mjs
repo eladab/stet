@@ -41,6 +41,7 @@ function parseArgs (argv) {
     else if (argv[i] === '--idle') args.idle = Number(argv[++i])
     else if (argv[i] === '--no-open') args.noOpen = true
     else if (argv[i] === '--browser') args.browser = true
+    else if (argv[i] === '--cmux') args.cmux = argv[++i]
     else if (argv[i] === '--update') args.update = true
     else if (argv[i] === '--version' || argv[i] === '-v') args.version = true
     else if (argv[i] === '--help' || argv[i] === '-h') args.help = true
@@ -51,9 +52,10 @@ function parseArgs (argv) {
 
 const args = parseArgs(process.argv.slice(2))
 if (args.help) {
-  console.log('usage: stet [path-inside-repo] [--port N] [--no-open] [--browser] [--fg] [--idle SECS]')
+  console.log('usage: stet [path-inside-repo] [--port N] [--no-open] [--browser] [--cmux split|tab] [--fg] [--idle SECS]')
   console.log('  --idle:    shut down after N seconds without browser contact (default 120, 0 = never)')
   console.log('  --browser: force the OS browser even inside cmux (cmux opens a split pane by default)')
+  console.log('  --cmux:    inside cmux, open as a "split" pane (default) or a "tab"')
   console.log('  --update:  pull the source checkout and reinstall this binary')
   console.log('  --version: print build version')
   process.exit(0)
@@ -102,6 +104,11 @@ const repoArg = args.repo || args._[0]
 const portArg = args.port
 const openArg = !args.noOpen
 const browserArg = !!args.browser
+const cmuxPlacement = args.cmux || 'split'
+if (!['split', 'tab'].includes(cmuxPlacement)) {
+  console.error(`stet: --cmux must be "split" or "tab" (got "${args.cmux}")`)
+  process.exit(1)
+}
 
 // Inside a cmux pane? cmux sets CMUX_* in every pane and ships a CLI that can
 // open a WebKit browser surface. Return its path (env-provided, else on PATH),
@@ -109,6 +116,15 @@ const browserArg = !!args.browser
 function cmuxBin () {
   if (!process.env.CMUX_SOCKET_PATH && !process.env.CMUX_WORKSPACE_ID) return null
   return process.env.CMUX_BUNDLED_CLI_PATH || process.env.CMUX_CLAUDE_HOOK_CMUX_BIN || 'cmux'
+}
+
+// cmux CLI argv to open `url` per --cmux placement:
+//   split → a new browser split pane (`cmux browser open-split`)
+//   tab   → a tab in the current pane (`cmux open <url>`)
+function cmuxOpenArgs (url) {
+  return cmuxPlacement === 'tab'
+    ? ['open', url, '--focus', 'true']
+    : ['browser', 'open-split', url, '--focus', 'true']
 }
 
 // Open a URL in the user's default OS browser.
@@ -168,10 +184,10 @@ if (!args.fg) {
     const url = `http://127.0.0.1:${port}/?t=${token}`
     if (cmux) {
       // synchronous so the socket write completes before we exit
-      try { execFileSync(cmux, ['browser', 'open-split', url, '--focus', 'true'], { stdio: 'ignore' }) } catch { osOpen(url) }
+      try { execFileSync(cmux, cmuxOpenArgs(url), { stdio: 'ignore' }) } catch { osOpen(url) }
     } else osOpen(url)
   }
-  const where = openArg ? ` — opening in ${cmux ? 'a cmux pane' : 'the browser'}` : ''
+  const where = openArg ? ` — opening in ${cmux ? `a cmux ${cmuxPlacement}` : 'the browser'}` : ''
   console.log(`stet starting${where}. Quit with the ⏻ button or the q key.`)
   process.exit(0)
 }
@@ -642,9 +658,9 @@ server.listen(portArg || 0, '127.0.0.1', () => {
   if (!openArg) return
   const cmux = browserArg ? null : cmuxBin()
   if (cmux) {
-    // open-split puts stet in a new pane beside the current one; --focus brings
-    // it forward. If the cmux CLI can't be spawned, fall back to the browser.
-    const p = spawn(cmux, ['browser', 'open-split', url, '--focus', 'true'], { stdio: 'ignore', detached: true })
+    // placement per --cmux (split pane or tab); --focus brings it forward.
+    // If the cmux CLI can't be spawned, fall back to the browser.
+    const p = spawn(cmux, cmuxOpenArgs(url), { stdio: 'ignore', detached: true })
     p.on('error', () => osOpen(url)) // ENOENT etc. — pane never opened, so safe
     p.unref()
   } else {
