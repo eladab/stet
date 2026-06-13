@@ -31,13 +31,21 @@ the checkout, clone it again and run `./install.sh`.
 stet                    # open UI for the repo containing the cwd (detached)
 stet ~/code/myrepo      # any path inside a repo works
 stet --fg               # foreground: prints STET_URL=..., Ctrl+C stops
-stet --no-open          # don't auto-open the browser
+stet --no-open          # don't auto-open anything
+stet --browser          # force the OS browser even inside cmux
 stet --port 7777        # fixed port (default: ephemeral)
 stet --idle 600         # shut down after 10 min without browser contact (default 120s, 0 = never)
 ```
 
 The UI heartbeats the server every 2s; closing the tab (or the whole browser)
 stops the heartbeat and the server exits on its own after `--idle` seconds.
+
+### cmux
+
+Inside [cmux](https://cmux.com), stet auto-detects the pane (via `CMUX_*` env)
+and opens itself in a split WebKit pane — `cmux browser open-split` — instead of
+the OS browser. The pane runs the same UI and heartbeat, so closing it shuts the
+server down just like a browser tab. Use `--browser` to force the OS browser.
 
 Press `?` in the UI for keyboard shortcuts. Quit with the ⏻ button or `q`.
 

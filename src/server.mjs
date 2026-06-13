@@ -12,6 +12,7 @@
  */
 
 import http from 'node:http'
+import net from 'node:net'
 import crypto from 'node:crypto'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -39,6 +40,7 @@ function parseArgs (argv) {
     else if (argv[i] === '--fg') args.fg = true
     else if (argv[i] === '--idle') args.idle = Number(argv[++i])
     else if (argv[i] === '--no-open') args.noOpen = true
+    else if (argv[i] === '--browser') args.browser = true
     else if (argv[i] === '--update') args.update = true
     else if (argv[i] === '--version' || argv[i] === '-v') args.version = true
     else if (argv[i] === '--help' || argv[i] === '-h') args.help = true
@@ -49,8 +51,9 @@ function parseArgs (argv) {
 
 const args = parseArgs(process.argv.slice(2))
 if (args.help) {
-  console.log('usage: stet [path-inside-repo] [--port N] [--no-open] [--fg] [--idle SECS]')
+  console.log('usage: stet [path-inside-repo] [--port N] [--no-open] [--browser] [--fg] [--idle SECS]')
   console.log('  --idle:    shut down after N seconds without browser contact (default 120, 0 = never)')
+  console.log('  --browser: force the OS browser even inside cmux (cmux opens a split pane by default)')
   console.log('  --update:  pull the source checkout and reinstall this binary')
   console.log('  --version: print build version')
   process.exit(0)
@@ -98,6 +101,23 @@ if (args.update) {
 const repoArg = args.repo || args._[0]
 const portArg = args.port
 const openArg = !args.noOpen
+const browserArg = !!args.browser
+
+// Inside a cmux pane? cmux sets CMUX_* in every pane and ships a CLI that can
+// open a WebKit browser surface. Return its path (env-provided, else on PATH),
+// or null when not running under cmux.
+function cmuxBin () {
+  if (!process.env.CMUX_SOCKET_PATH && !process.env.CMUX_WORKSPACE_ID) return null
+  return process.env.CMUX_BUNDLED_CLI_PATH || process.env.CMUX_CLAUDE_HOOK_CMUX_BIN || 'cmux'
+}
+
+// Open a URL in the user's default OS browser.
+function osOpen (u) {
+  const opener = process.platform === 'darwin' ? 'open'
+    : process.platform === 'win32' ? 'start'
+    : 'xdg-open'
+  spawn(opener, [u], { stdio: 'ignore', detached: true }).on('error', () => {}).unref()
+}
 
 // Resolve the repo root ourselves — callers may pass any path inside the repo,
 // or nothing at all (defaults to cwd).
@@ -112,19 +132,53 @@ try {
   process.exit(1)
 }
 
-// Default mode: re-spawn ourselves detached and return immediately; the child
-// runs with --fg and opens the browser. Repo errors above still surface here.
+// Pick a free ephemeral TCP port on the loopback (bind :0, read it, release).
+function pickPort () {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer()
+    probe.on('error', reject)
+    probe.listen(0, '127.0.0.1', () => {
+      const { port } = probe.address()
+      probe.close(() => resolve(port))
+    })
+  })
+}
+
+// Default mode: re-spawn ourselves detached as the --fg server, then *we* open
+// the window and exit. Opening must happen here, not in the child: the cmux CLI
+// run from a doubly-detached orphan fails with "broken pipe" on the cmux socket.
+// As the process cmux/the shell launched directly, we're in a healthy session.
+//
+// We choose the port and token ourselves and hand them to the child so we know
+// the URL up front — letting us open synchronously and exit before falling
+// through to the server bootstrap below (which only the --fg child should run).
 if (!args.fg) {
-  const childArgs = [SELF, '--fg', '--repo', REPO]
-  if (portArg) childArgs.push('--port', String(portArg))
-  if (!openArg) childArgs.push('--no-open')
+  const cmux = !browserArg && cmuxBin()
+  const port = portArg || await pickPort()
+  const token = crypto.randomBytes(16).toString('hex')
+  const childArgs = [SELF, '--fg', '--repo', REPO, '--no-open', '--port', String(port)]
   if (args.idle !== undefined) childArgs.push('--idle', String(args.idle))
-  spawn(process.execPath, childArgs, { stdio: 'ignore', detached: true }).unref()
-  console.log('stet starting — browser will open. Quit with the ⏻ button or the q key.')
+  spawn(process.execPath, childArgs, {
+    stdio: 'ignore',
+    detached: true,
+    env: { ...process.env, STET_TOKEN: token }
+  }).unref()
+
+  if (openArg) {
+    const url = `http://127.0.0.1:${port}/?t=${token}`
+    if (cmux) {
+      // synchronous so the socket write completes before we exit
+      try { execFileSync(cmux, ['browser', 'open-split', url, '--focus', 'true'], { stdio: 'ignore' }) } catch { osOpen(url) }
+    } else osOpen(url)
+  }
+  const where = openArg ? ` — opening in ${cmux ? 'a cmux pane' : 'the browser'}` : ''
+  console.log(`stet starting${where}. Quit with the ⏻ button or the q key.`)
   process.exit(0)
 }
 
-const TOKEN = crypto.randomBytes(16).toString('hex')
+// In daemon mode our parent picks the token and passes it down so it knows the
+// URL to open; a directly-run --fg server makes its own.
+const TOKEN = process.env.STET_TOKEN || crypto.randomBytes(16).toString('hex')
 
 // ---------------------------------------------------------------------------
 // git helpers
@@ -585,10 +639,15 @@ server.listen(portArg || 0, '127.0.0.1', () => {
   const { port } = server.address()
   const url = `http://127.0.0.1:${port}/?t=${TOKEN}`
   console.log(`STET_URL=${url}`)
-  if (openArg) {
-    const opener = process.platform === 'darwin' ? 'open'
-      : process.platform === 'win32' ? 'start'
-      : 'xdg-open'
-    spawn(opener, [url], { stdio: 'ignore', detached: true }).on('error', () => {}).unref()
+  if (!openArg) return
+  const cmux = browserArg ? null : cmuxBin()
+  if (cmux) {
+    // open-split puts stet in a new pane beside the current one; --focus brings
+    // it forward. If the cmux CLI can't be spawned, fall back to the browser.
+    const p = spawn(cmux, ['browser', 'open-split', url, '--focus', 'true'], { stdio: 'ignore', detached: true })
+    p.on('error', () => osOpen(url)) // ENOENT etc. — pane never opened, so safe
+    p.unref()
+  } else {
+    osOpen(url)
   }
 })
