@@ -246,7 +246,9 @@ async function resolveBase (requested) {
 const DIFF_FLAGS = ['--no-color', '--no-ext-diff']
 
 async function apiState () {
-  const { stdout } = await git(['status', '--porcelain=v2', '--branch', '-z'])
+  // --untracked-files=all: list files inside new dirs individually, not as a
+  // collapsed "dir/" entry (whose trailing slash fails path validation / diff).
+  const { stdout } = await git(['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=all'])
   const state = parseStatus(stdout)
   let lastCommit = null
   try {
